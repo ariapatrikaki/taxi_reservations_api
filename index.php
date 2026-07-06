@@ -832,7 +832,7 @@ try {
             style="min-width: 140px; flex: 0 0 auto;"
         >
             <span class="stat-label" style="color: #1d4ed8;">Today</span>
-            <strong class="stat-value" style="color: #1e40af;"><?= $todayCount ?></strong>
+            <strong class="stat-value"><?= $todayCount ?></strong>
         </a>
 
         <a
@@ -842,7 +842,7 @@ try {
             style="min-width: 140px; flex: 0 0 auto;"
         >
             <span class="stat-label" style="color: #6b21a8;">Tomorrow</span>
-            <strong class="stat-value" style="color: #581c87;"><?= $tomorrowCount ?></strong>
+            <strong class="stat-value"><?= $tomorrowCount ?></strong>
         </a>
 
         <a
@@ -852,7 +852,7 @@ try {
             style="min-width: 140px; flex: 0 0 auto;"
         >
             <span class="stat-label" style="color: #0d9488;">Week</span>
-            <strong class="stat-value" style="color: #115e59;"><?= $weekCount ?></strong>
+            <strong class="stat-value"><?= $weekCount ?></strong>
         </a>
     </section>
 
@@ -1233,7 +1233,6 @@ try {
                 </summary>
 
                 <div class="details-panel">
-                    <!-- 1. Passengers & Luggage -->
                     <article class="detail-box">
                         <h2>Passengers &amp; Luggage</h2>
                         <?php if ($compactItems): ?>
@@ -1261,7 +1260,6 @@ try {
                         <?php endif; ?>
                     </article>
 
-                    <!-- 2. Customer Message -->
                     <?php if ($hasCustomerMessage): ?>
                         <article class="detail-box customer-message-box">
                             <h2>
@@ -1277,7 +1275,6 @@ try {
                         </article>
                     <?php endif; ?>
 
-                    <!-- 3. Booking Information -->
                     <article class="detail-box booking-info-box">
                         <h2>Booking Information</h2>
                         <dl class="detail-list">
@@ -1294,7 +1291,6 @@ try {
                         </dl>
                     </article>
 
-                    <!-- 4. Route Details (Mobile only) -->
                     <article class="detail-box mobile-route-details-box">
                         <h2>Route Details</h2>
                         <div class="mobile-route-details-list">
@@ -1327,7 +1323,6 @@ try {
                         </div>
                     </article>
 
-                    <!-- 5. Flight Details -->
                     <?php if ($hasFlightDetails): ?>
                         <article class="detail-box flight-detail-box">
                             <h2>Flight Details</h2>
@@ -1372,7 +1367,6 @@ try {
                         </article>
                     <?php endif; ?>
 
-                    <!-- 6. Reservation Status (ΕΔΩ ΕΙΝΑΙ ΣΤΟ ΤΕΛΟΣ) -->
                     <article class="detail-box status-action-box">
                         <h2>Reservation Status</h2>
                         <p>Current status: <strong><?= e(displayLabel($reservation['status'])) ?></strong></p>
@@ -1380,7 +1374,19 @@ try {
                             <?php if (trim((string)($reservation['source_id'] ?? '')) === ''): ?>
                                 <p>Status changes require the numeric API reservation ID.</p>
                             <?php else: ?>
-                                <?php if ($statusKey === 'confirmed' || $statusKey === 'active'): ?>
+                                <?php if ($statusKey === 'active'): ?>
+                                    <form method="post" action="update-status.php" onsubmit="return confirm('Are you sure you want to confirm this reservation?');">
+                                        <input type="hidden" name="csrf_token" value="<?= e($_SESSION['csrf_token']) ?>">
+                                        <input type="hidden" name="booking_id" value="<?= e($reservation['booking_id']) ?>">
+                                        <input type="hidden" name="status" value="confirmed">
+                                        <button class="reactivate-reservation-button" type="submit">
+                                            <svg viewBox="0 0 24 24" focusable="false" style="width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; vertical-align: middle; margin-right: 4px;">
+                                                <polyline points="20 6 9 17 4 12"></polyline>
+                                            </svg>
+                                            Confirm reservation
+                                        </button>
+                                    </form>
+
                                     <form method="post" action="update-status.php" onsubmit="return confirm('Are you sure you want to cancel this reservation?');">
                                         <input type="hidden" name="csrf_token" value="<?= e($_SESSION['csrf_token']) ?>">
                                         <input type="hidden" name="booking_id" value="<?= e($reservation['booking_id']) ?>">
@@ -1393,6 +1399,21 @@ try {
                                             Cancel reservation
                                         </button>
                                     </form>
+
+                                <?php elseif ($statusKey === 'confirmed'): ?>
+                                    <form method="post" action="update-status.php" onsubmit="return confirm('Are you sure you want to cancel this reservation?');">
+                                        <input type="hidden" name="csrf_token" value="<?= e($_SESSION['csrf_token']) ?>">
+                                        <input type="hidden" name="booking_id" value="<?= e($reservation['booking_id']) ?>">
+                                        <input type="hidden" name="status" value="cancelled">
+                                        <button class="cancel-reservation-button" type="submit">
+                                            <svg viewBox="0 0 24 24" focusable="false" style="width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; vertical-align: middle; margin-right: 4px;">
+                                                <circle cx="12" cy="12" r="10"></circle>
+                                                <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>
+                                            </svg>
+                                            Cancel reservation
+                                        </button>
+                                    </form>
+
                                 <?php elseif (in_array($statusKey, ['cancelled', 'canceled'], true)): ?>
                                     <form method="post" action="update-status.php" onsubmit="return confirm('Mark this reservation as confirmed?');">
                                         <input type="hidden" name="csrf_token" value="<?= e($_SESSION['csrf_token']) ?>">
