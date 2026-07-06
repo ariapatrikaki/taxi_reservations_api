@@ -1,6 +1,16 @@
 <?php
 declare(strict_types=1);
 
+session_start();
+
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
+$flashMessage = (string)($_SESSION['flash_message'] ?? '');
+$flashType = (string)($_SESSION['flash_type'] ?? 'info');
+unset($_SESSION['flash_message'], $_SESSION['flash_type']);
+
 require_once __DIR__ . '/app.php';
 
 $config = appConfig();
@@ -9,9 +19,9 @@ try {
     $database = initializeDatabase($config['database']);
     $pdo = $database['pdo'];
 
-    $syncResult = syncReservationsFromJson(
+    $syncResult = syncReservationsFromApi(
         $pdo,
-        (string)$config['json_file'],
+        (array)$config['api'],
         (bool)$database['force_resync']
     );
 
@@ -24,8 +34,26 @@ try {
     $tripsByReservation = findTripsByReservationIds($pdo, $reservationIds);
     $summary = getReservationSummary($pdo);
 
+    // Υπολογισμός των σημερινών πραγματικών δρομολογίων (Trip Legs)
+    $todayDate = date('Y-m-d');
+    $todayStmt = $pdo->prepare("SELECT COUNT(*) FROM trips WHERE trip_date = ?");
+    $todayStmt->execute([$todayDate]);
+    $todayCount = (int)$todayStmt->fetchColumn();
+
+    // Υπολογισμός των αυριανών πραγματικών δρομολογίων (Trip Legs)
+    $tomorrowDate = date('Y-m-d', strtotime('+1 day'));
+    $tomorrowStmt = $pdo->prepare("SELECT COUNT(*) FROM trips WHERE trip_date = ?");
+    $tomorrowStmt->execute([$tomorrowDate]);
+    $tomorrowCount = (int)$tomorrowStmt->fetchColumn();
+
+    // Υπολογισμός των πραγματικών δρομολογίων της εβδομάδας (Trip Legs)
+    $weekEndDate = date('Y-m-d', strtotime('+6 days'));
+    $weekStmt = $pdo->prepare("SELECT COUNT(*) FROM trips WHERE trip_date BETWEEN ? AND ?");
+    $weekStmt->execute([$todayDate, $weekEndDate]);
+    $weekCount = (int)$weekStmt->fetchColumn();
+
     $syncMessage = $syncResult['message'];
-    $currentJsonHash = $syncResult['hash'];
+    $currentApiHash = $syncResult['hash'];
 } catch (Throwable $error) {
     http_response_code(500);
     $errorMessage = $error->getMessage();
@@ -59,56 +87,772 @@ try {
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="color-scheme" content="light">
     <meta name="theme-color" content="#f4f7fb">
-    <title>Reservations Dashboard</title>
+    <title>Reservations</title>
     <link rel="stylesheet" href="style.css">
+    <style>
+        /* Passenger and luggage icons used on desktop and mobile. */
+        .passenger-icon-summary {
+            display: inline-flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 7px 10px;
+            min-width: 0;
+        }
+
+        .passenger-stat {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            color: #475569;
+            white-space: nowrap;
+            font-weight: 750;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .passenger-stat svg {
+            width: 16px;
+            height: 16px;
+            flex: 0 0 16px;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 1.9;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        .passenger-stat--adults svg,
+        .passenger-stat--child svg {
+            width: 18px;
+            height: 18px;
+            flex-basis: 18px;
+        }
+
+        .passenger-stat--child {
+            color: #6d5bd0;
+        }
+
+        .passenger-stat--child svg {
+            width: 19px;
+            height: 19px;
+            flex-basis: 19px;
+            stroke-width: 1.75;
+        }
+
+        .passenger-stat--luggage {
+            color: #0f7490;
+        }
+
+        .passenger-extra-items {
+            display: grid;
+            gap: 3px;
+            width: 100%;
+            margin-top: 5px;
+            color: #64748b;
+            font-size: 0.72rem;
+            line-height: 1.3;
+        }
+
+        @media (max-width: 760px) {
+            .mobile-ride-meta {
+                row-gap: 4px;
+            }
+
+            .mobile-ride-meta .passenger-icon-summary {
+                gap: 5px 7px;
+            }
+
+            .mobile-ride-meta .passenger-stat {
+                gap: 3px;
+                font-weight: 800;
+            }
+
+            .mobile-ride-meta .passenger-stat svg {
+                width: 16px;
+                height: 16px;
+                flex-basis: 16px;
+            }
+
+            .mobile-ride-meta .passenger-stat--adults svg,
+            .mobile-ride-meta .passenger-stat--child svg {
+                width: 18px;
+                height: 18px;
+                flex-basis: 18px;
+            }
+        }
+
+        @media (max-width: 760px) {
+            .mobile-reservation-overview {
+                display: block;
+                min-height: 0;
+                padding: 0;
+            }
+
+            .mobile-primary-trip-row {
+                display: grid;
+                grid-template-columns: 47px minmax(0, 1fr) 9px;
+                align-items: center;
+                gap: 8px;
+                min-height: 68px;
+                padding: 8px 9px 8px 42px;
+            }
+
+            .mobile-reservation-overview.has-mobile-return .mobile-primary-trip-row {
+                padding-bottom: 7px;
+            }
+
+            .mobile-ride-meta {
+                margin-top: 5px;
+            }
+
+            .mobile-meta-divider {
+                color: #a1aabc;
+            }
+
+            .mobile-vehicle-name {
+                max-width: 42%;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            .mobile-return-trip {
+                position: relative;
+                display: grid;
+                grid-template-columns: 47px minmax(0, 1fr);
+                align-items: center;
+                gap: 8px;
+                min-width: 0;
+                margin: -1px 9px 8px 42px;
+                padding: 7px 9px;
+                border: 1px solid #dbe4f2;
+                border-left: 3px solid #6d5bd0;
+                border-radius: 4px 4px 11px 11px;
+                background: linear-gradient(145deg, #faf9ff, #f4f6ff);
+                box-shadow: 0 3px 9px rgba(79, 70, 229, 0.06);
+            }
+
+            .mobile-return-time {
+                display: grid;
+                align-content: center;
+                min-width: 0;
+                padding-right: 7px;
+                border-right: 1px solid #dde3f0;
+                text-align: center;
+            }
+
+            .mobile-return-time strong {
+                color: #4438a8;
+                font-size: 0.82rem;
+                line-height: 1.05;
+            }
+
+            .mobile-return-time span {
+                margin-top: 4px;
+                color: #7b7898;
+                font-size: 0.51rem;
+                font-weight: 850;
+                letter-spacing: 0.035em;
+                line-height: 1;
+                white-space: nowrap;
+            }
+
+            .mobile-return-main {
+                display: grid;
+                gap: 3px;
+                min-width: 0;
+            }
+
+            .mobile-return-label {
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+                width: fit-content;
+                color: #6555c7;
+                font-size: 0.56rem;
+                font-weight: 900;
+                letter-spacing: 0.055em;
+                line-height: 1;
+                text-transform: uppercase;
+            }
+
+            .mobile-return-label svg {
+                width: 12px;
+                height: 12px;
+                fill: none;
+                stroke: currentColor;
+                stroke-width: 2;
+                stroke-linecap: round;
+                stroke-linejoin: round;
+            }
+
+            .mobile-return-route {
+                display: flex;
+                align-items: baseline;
+                gap: 4px;
+                min-width: 0;
+                overflow: hidden;
+                color: #4b5568;
+                font-size: 0.69rem;
+                line-height: 1.2;
+                white-space: nowrap;
+            }
+
+            .mobile-return-route strong,
+            .mobile-return-route span {
+                min-width: 0;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            .mobile-return-route strong {
+                flex: 0 1 auto;
+                color: #30364a;
+            }
+
+            .mobile-return-route span {
+                flex: 1 1 auto;
+                color: #697386;
+            }
+        }
+
+        /* --------------------------------------------------------------
+           Final mobile refinements
+        -------------------------------------------------------------- */
+        @media (max-width: 760px) {
+            .mobile-primary-trip-row {
+                grid-template-columns: 47px minmax(0, 1fr) 30px;
+            }
+
+            .mobile-ride-time,
+            .mobile-return-time {
+                display: flex !important;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+            }
+
+            .mobile-ride-time span,
+            .mobile-return-time span {
+                order: 1;
+                margin: 0;
+                color: #172033 !important;
+                font-size: 0.79rem !important;
+                font-weight: 900 !important;
+                letter-spacing: 0.025em;
+                line-height: 1.1;
+                white-space: nowrap;
+            }
+
+            .mobile-ride-time strong,
+            .mobile-return-time strong {
+                order: 2;
+                margin-top: 4px;
+                color: #64748b !important;
+                font-size: 0.63rem !important;
+                font-weight: 750 !important;
+                line-height: 1;
+            }
+
+            .mobile-status-dot,
+            .mobile-message-dot {
+                display: none !important;
+            }
+
+            .reservation-card.status-active,
+            .reservation-card.status-confirmed {
+                border-color: #dceee2;
+                background: #f7fcf8;
+            }
+
+            .reservation-card.status-active .reservation-summary,
+            .reservation-card.status-active .mobile-reservation-overview,
+            .reservation-card.status-active .mobile-primary-trip-row,
+            .reservation-card.status-confirmed .reservation-summary,
+            .reservation-card.status-confirmed .mobile-reservation-overview,
+            .reservation-card.status-confirmed .mobile-primary-trip-row {
+                background: #f7fcf8 !important;
+            }
+
+            .reservation-card.status-active .mobile-return-trip,
+            .reservation-card.status-confirmed .mobile-return-trip {
+                border-color: #dceee2;
+                border-left-color: #78b88a;
+                background: #f6fbf7 !important;
+            }
+
+            .reservation-card.status-cancelled,
+            .reservation-card.status-canceled {
+                border-color: #f2dddd;
+                background: #fffafa;
+            }
+
+            .reservation-card.status-cancelled .reservation-summary,
+            .reservation-card.status-cancelled .mobile-reservation-overview,
+            .reservation-card.status-cancelled .mobile-primary-trip-row,
+            .reservation-card.status-canceled .reservation-summary,
+            .reservation-card.status-canceled .mobile-reservation-overview,
+            .reservation-card.status-canceled .mobile-primary-trip-row {
+                background: #fffafa !important;
+            }
+
+            .reservation-card.status-cancelled .mobile-return-trip,
+            .reservation-card.status-canceled .mobile-return-trip {
+                border-color: #f2dddd;
+                border-left-color: #dca0a0;
+                background: #fff6f6 !important;
+            }
+
+            .mobile-message-icon {
+                display: grid;
+                place-items: center;
+                justify-self: center;
+                align-self: center;
+                width: 27px;
+                height: 27px;
+                border: 1px solid #fed7aa;
+                border-radius: 50%;
+                background: #fff7ed;
+                color: #ea580c;
+            }
+
+            .mobile-message-icon svg {
+                width: 15px;
+                height: 15px;
+                fill: none;
+                stroke: currentColor;
+                stroke-width: 1.9;
+                stroke-linecap: round;
+                stroke-linejoin: round;
+            }
+
+            .mobile-vehicle-name {
+                color: #172033 !important;
+                font-weight: 900 !important;
+            }
+
+            .booking-info-box .detail-row dd {
+                color: #172033;
+                font-weight: 750;
+            }
+
+            .booking-info-box .detail-row:first-child dd {
+                color: #3154a5;
+                font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            }
+        }
+
+        .mobile-route-details-box {
+            display: none;
+        }
+
+        @media (max-width: 760px) {
+            .filter-card {
+                margin-bottom: 7px !important;
+                padding: 7px 8px !important;
+                border-radius: 11px !important;
+            }
+
+            .filters {
+                gap: 5px !important;
+            }
+
+            .field {
+                gap: 3px !important;
+            }
+
+            .field label {
+                font-size: 0.56rem !important;
+                line-height: 1.05;
+            }
+
+            .field input {
+                min-height: 34px !important;
+                height: 34px;
+                padding: 6px 9px !important;
+                border-radius: 8px !important;
+                font-size: 16px !important;
+            }
+
+            .filter-actions {
+                gap: 5px !important;
+            }
+
+            .filter-actions .button {
+                min-height: 34px !important;
+                padding: 6px 9px !important;
+                border-radius: 8px !important;
+                font-size: 0.74rem !important;
+            }
+
+            .mobile-route-details-box {
+                display: block;
+            }
+
+            .mobile-route-details-list {
+                display: grid;
+                gap: 8px;
+            }
+
+            .mobile-route-detail {
+                display: grid;
+                gap: 7px;
+                padding: 9px 10px;
+                border: 1px solid #e1e7f0;
+                border-radius: 10px;
+                background: #fbfcfe;
+            }
+
+            .mobile-route-detail-heading {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 8px;
+            }
+
+            .mobile-route-detail-label {
+                display: inline-flex;
+                align-items: center;
+                width: fit-content;
+                padding: 3px 7px;
+                border-radius: 999px;
+                background: #eef2ff;
+                color: #5145b8;
+                font-size: 0.58rem;
+                font-weight: 900;
+                letter-spacing: 0.04em;
+                line-height: 1;
+                text-transform: uppercase;
+            }
+
+            .mobile-route-detail-date-time {
+                color: #64748b;
+                font-size: 0.67rem;
+                font-weight: 750;
+                white-space: nowrap;
+            }
+
+            .mobile-route-detail-list {
+                display: grid;
+                gap: 6px;
+                margin: 0;
+            }
+
+            .mobile-route-detail-row {
+                display: grid;
+                grid-template-columns: 42px minmax(0, 1fr);
+                align-items: start;
+                gap: 8px;
+            }
+
+            .mobile-route-detail-row dt {
+                color: #8a94a6;
+                font-size: 0.59rem;
+                font-weight: 850;
+                letter-spacing: 0.035em;
+                line-height: 1.35;
+                text-transform: uppercase;
+            }
+
+            .mobile-route-detail-row dd {
+                min-width: 0;
+                margin: 0;
+                color: #263247;
+                font-size: 0.76rem;
+                font-weight: 700;
+                line-height: 1.38;
+                overflow-wrap: anywhere;
+                word-break: break-word;
+            }
+        }
+
+        /* --------------------------------------------------------------
+           Desktop customer-message notification and delayed tooltip
+        -------------------------------------------------------------- */
+        .desktop-customer-message {
+            display: none;
+        }
+
+        @media (min-width: 761px) {
+            .customer-cell {
+                position: relative;
+                overflow: visible;
+            }
+
+            .customer-content {
+                position: relative;
+                display: flex;
+                flex-direction: column;
+                align-items: flex-start;
+                min-width: 0;
+                width: 100%;
+            }
+
+            .customer-name-line {
+                display: flex;
+                align-items: center;
+                gap: 7px;
+                min-width: 0;
+                width: 100%;
+            }
+
+            .customer-name-line > strong {
+                min-width: 0;
+            }
+
+            .desktop-customer-message {
+                position: relative;
+                z-index: 20;
+                display: grid;
+                place-items: center;
+                flex: 0 0 25px;
+                width: 25px;
+                height: 25px;
+                border: 1px solid #fed7aa;
+                border-radius: 50%;
+                background: #fff7ed;
+                color: #ea580c;
+                cursor: help;
+                outline: none;
+            }
+
+            .desktop-customer-message svg {
+                width: 14px;
+                height: 14px;
+                fill: none;
+                stroke: currentColor;
+                stroke-width: 1.9;
+                stroke-linecap: round;
+                stroke-linejoin: round;
+            }
+
+            .desktop-customer-message:focus-visible {
+                box-shadow: 0 0 0 3px rgba(234, 88, 12, 0.16);
+            }
+
+            .desktop-customer-message-tooltip {
+                position: absolute;
+                top: auto;
+                bottom: calc(100% + 8px);
+                left: 50%;
+                z-index: 50;
+                width: max-content;
+                min-width: 180px;
+                max-width: min(330px, 36vw);
+                padding: 10px 12px;
+                border: 1px solid #fed7aa;
+                border-radius: 10px;
+                background: #fffdf9;
+                color: #7c2d12;
+                font-size: 0.76rem;
+                font-weight: 650;
+                line-height: 1.42;
+                text-align: left;
+                white-space: pre-wrap;
+                overflow-wrap: anywhere;
+                box-shadow: 0 10px 28px rgba(15, 23, 42, 0.16);
+                opacity: 0;
+                visibility: hidden;
+                transform: translate(-50%, 4px);
+                pointer-events: none;
+                transition:
+                    opacity 0.14s ease,
+                    transform 0.14s ease,
+                    visibility 0s linear 0.14s;
+            }
+
+            .desktop-customer-message:hover .desktop-customer-message-tooltip,
+            .desktop-customer-message:focus .desktop-customer-message-tooltip,
+            .desktop-customer-message:focus-visible .desktop-customer-message-tooltip {
+                opacity: 1;
+                visibility: visible;
+                transform: translate(-50%, 0);
+                transition-delay: 0.6s, 0.6s, 0.6s;
+            }
+
+            .desktop-customer-message,
+            .desktop-customer-message::before,
+            .desktop-customer-message::after {
+                animation: none !important;
+            }
+        }
+
+        .booking-info-box {
+            display: none;
+        }
+
+        @media (max-width: 760px) {
+            .booking-info-box {
+                display: block;
+            }
+        }
+
+        @media (min-width: 761px) {
+            .customer-content {
+                position: relative;
+                width: 100%;
+                padding-right: 36px;
+            }
+
+            .customer-name-line {
+                display: block;
+                width: 100%;
+            }
+
+            .desktop-customer-message {
+                position: absolute;
+                top: 0;
+                right: 0;
+                left: auto;
+                display: grid;
+                place-items: center;
+                width: 25px;
+                height: 25px;
+                margin: 0;
+            }
+        }
+
+        /* --------------------------------------------------------------
+           Modern Action Buttons Styling
+        -------------------------------------------------------------- */
+        .status-button-wrapper {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-top: 15px;
+        }
+
+        .status-button-wrapper form {
+            display: inline-block;
+            margin: 0 !important;
+        }
+
+        .cancel-reservation-button,
+        .reactivate-reservation-button,
+        .delete-reservation-button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            font-family: inherit;
+            font-size: 0.82rem !important;
+            font-weight: 700 !important;
+            padding: 8px 16px !important;
+            border-radius: 8px !important;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: 1px solid transparent;
+            height: 36px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+            text-decoration: none;
+        }
+
+        .cancel-reservation-button {
+            background-color: #fff7ed !important;
+            color: #ea580c !important;
+            border-color: #ffedd5 !important;
+        }
+        .cancel-reservation-button:hover {
+            background-color: #ffedd5 !important;
+            transform: translateY(-1px);
+        }
+
+        .reactivate-reservation-button {
+            background-color: #f0fdf4 !important;
+            color: #16a34a !important;
+            border-color: #dcfce7 !important;
+            margin: 0 !important;
+        }
+        .reactivate-reservation-button:hover {
+            background-color: #dcfce7 !important;
+            transform: translateY(-1px);
+        }
+
+        .delete-reservation-button {
+            background-color: #fef2f2 !important;
+            color: #dc2626 !important;
+            border-color: #fee2e2 !important;
+        }
+        .delete-reservation-button:hover {
+            background-color: #fee2e2 !important;
+            border-color: #fca5a5 !important;
+            transform: translateY(-1px);
+        }
+
+        .stat-card.active-today {
+            border-color: #bfdbfe !important;
+            background-color: #eff6ff !important;
+        }
+        .stat-card.active-tomorrow {
+            border-color: #e9d5ff !important;
+            background-color: #f3e8ff !important;
+        }
+        .stat-card.active-week {
+            border-color: #ccfbf1 !important;
+            background-color: #f0fdfa !important;
+        }
+
+        @media (min-width: 500px) {
+            .status-button-wrapper {
+                flex-direction: row;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 10px;
+            }
+        }
+    </style>
 </head>
 <body
-    data-json-hash="<?= e($currentJsonHash) ?>"
+    data-api-hash="<?= e($currentApiHash) ?>"
     data-watch-url="watch.php"
+    data-watch-interval="<?= (int)$config['api']['poll_interval_milliseconds'] ?>"
     data-open-storage-key="openReservationCards"
 >
 <main class="page-shell">
     <header class="topbar">
-        <div class="brand-wrap">
-            <div class="brand-mark" aria-hidden="true">R</div>
             <div>
-                <h1>Reservations Dashboard</h1>
-                <p class="subtitle">Live taxi and transfer reservations</p>
+                <h1>Reservations</h1>
             </div>
-        </div>
     </header>
 
-    <section class="stats-grid" aria-label="Reservation summary and quick filters">
+    <section class="stats-grid" aria-label="Reservation summary and quick filters" style="display: flex; gap: 16px; flex-wrap: wrap;">
         <a
-            class="stat-card<?= $filters['status'] === '' && $filters['payment'] === '' ? ' active' : '' ?>"
-            href="<?= e(dashboardUrl(['status' => null, 'payment' => null])) ?>"
+            class="stat-card<?= $filters['date_from'] === '' && $filters['date_to'] === '' && $filters['status'] === '' && $filters['payment'] === '' ? ' active' : '' ?>"
+            href="<?= e(dashboardUrl(['status' => null, 'payment' => null, 'date_from' => null, 'date_to' => null])) ?>"
+            style="min-width: 140px; flex: 0 0 auto;"
         >
-            <span class="stat-label">Total reservations</span>
+            <span class="stat-label">Total</span>
             <strong class="stat-value"><?= (int)$summary['total_count'] ?></strong>
         </a>
 
         <a
-            class="stat-card<?= strtolower($filters['status']) === 'active' ? ' active' : '' ?>"
-            href="<?= e(dashboardUrl(['status' => 'Active', 'payment' => null])) ?>"
+            class="stat-card<?= $filters['date_from'] === date('Y-m-d') && $filters['date_to'] === date('Y-m-d') ? ' active active-today' : '' ?>"
+            href="#"
+            id="todayStatCard"
+            style="min-width: 140px; flex: 0 0 auto;"
         >
-            <span class="stat-label">Active</span>
-            <strong class="stat-value"><?= (int)$summary['active_count'] ?></strong>
+            <span class="stat-label" style="color: #1d4ed8;">Today</span>
+            <strong class="stat-value" style="color: #1e40af;"><?= $todayCount ?></strong>
         </a>
 
         <a
-            class="stat-card<?= strtolower($filters['status']) === 'cancelled' ? ' active' : '' ?>"
-            href="<?= e(dashboardUrl(['status' => 'Cancelled', 'payment' => null])) ?>"
+            class="stat-card<?= $filters['date_from'] === date('Y-m-d', strtotime('+1 day')) && $filters['date_to'] === date('Y-m-d', strtotime('+1 day')) ? ' active active-tomorrow' : '' ?>"
+            href="#"
+            id="tomorrowStatCard"
+            style="min-width: 140px; flex: 0 0 auto;"
         >
-            <span class="stat-label">Cancelled</span>
-            <strong class="stat-value"><?= (int)$summary['cancelled_count'] ?></strong>
+            <span class="stat-label" style="color: #6b21a8;">Tomorrow</span>
+            <strong class="stat-value" style="color: #581c87;"><?= $tomorrowCount ?></strong>
         </a>
 
         <a
-            class="stat-card<?= $filters['payment'] === 'open' ? ' active' : '' ?>"
-            href="<?= e(dashboardUrl(['status' => null, 'payment' => 'open'])) ?>"
+            class="stat-card<?= $filters['date_from'] === date('Y-m-d') && $filters['date_to'] === date('Y-m-d', strtotime('+6 days')) ? ' active active-week' : '' ?>"
+            href="#"
+            id="weekStatCard"
+            style="min-width: 140px; flex: 0 0 auto;"
         >
-            <span class="stat-label">Open payments</span>
-            <strong class="stat-value"><?= (int)$summary['open_payments'] ?></strong>
+            <span class="stat-label" style="color: #0d9488;">Week</span>
+            <strong class="stat-value" style="color: #115e59;"><?= $weekCount ?></strong>
         </a>
     </section>
 
@@ -116,8 +860,14 @@ try {
         <div class="sync-banner" role="status"><?= e($syncMessage) ?></div>
     <?php endif; ?>
 
+    <?php if ($flashMessage !== ''): ?>
+        <div class="sync-banner <?= $flashType === 'error' ? 'sync-banner-error' : 'sync-banner-success' ?>" role="status">
+            <?= e($flashMessage) ?>
+        </div>
+    <?php endif; ?>
+
     <section class="filter-card">
-        <form class="filters" method="get" action="index.php">
+        <form class="filters" method="get" action="index.php" id="filterForm">
             <?php if ($filters['status'] !== ''): ?>
                 <input type="hidden" name="status" value="<?= e($filters['status']) ?>">
             <?php endif; ?>
@@ -154,14 +904,6 @@ try {
         </form>
     </section>
 
-    <div class="result-line">
-        <span><strong><?= count($reservations) ?></strong> reservations shown</span>
-        <span class="live-indicator">
-            <span class="live-dot" aria-hidden="true"></span>
-            Watching reservations.json for valid changes
-        </span>
-    </div>
-
     <section class="table-shell" aria-label="Reservations table">
         <div class="table-head" aria-hidden="true">
             <div>Booking ID</div>
@@ -194,43 +936,143 @@ try {
             $extraItems = decodeExtraItems($reservation['extra_items_json'] ?? null);
             $compactItems = buildCompactReservationItems($reservation, $extraItems);
             $flightDetails = parseFlightDetails($reservation['flight_details_text'] ?? null);
-            $hasFlightDetails = !empty($flightDetails)
-                || hasVisibleValue($reservation['flight_number'] ?? null);
+            $hasFlightDetails = !empty($flightDetails) || hasVisibleValue($reservation['flight_number'] ?? null);
             $customerMessage = trim((string)($reservation['customer_message'] ?? ''));
             $hasCustomerMessage = $customerMessage !== '';
             $hasCreatedAt = trim((string)($reservation['created_at'] ?? '')) !== '';
             $paymentMethod = displayPaymentMethod($reservation['payment_method'] ?? null);
             $driverId = trim((string)($reservation['driver_id'] ?? ''));
+            $primaryTrip = $trips[0] ?? [];
+            $primaryTripDate = trim((string)($primaryTrip['trip_date'] ?? ''));
+            $primaryTripTime = trim((string)($primaryTrip['trip_time'] ?? ''));
+            $primaryDateTimestamp = $primaryTripDate !== '' ? strtotime($primaryTripDate) : false;
+            $hasReturnTrip = count($trips) > 1;
+            $returnTrip = null;
+
+            foreach ($trips as $tripItem) {
+                if (strtolower(trim((string)($tripItem['label'] ?? ''))) === 'return') {
+                    $returnTrip = $tripItem;
+                    break;
+                }
+            }
+
+            if ($returnTrip === null && $hasReturnTrip) {
+                $returnTrip = $trips[1] ?? null;
+            }
+
+            $returnTripDate = trim((string)($returnTrip['trip_date'] ?? ''));
+            $returnTripTime = trim((string)($returnTrip['trip_time'] ?? ''));
+            $returnDateTimestamp = $returnTripDate !== '' ? strtotime($returnTripDate) : false;
+            $statusKey = preg_replace(
+                '/[^a-z0-9]+/',
+                '-',
+                strtolower(trim((string)($reservation['status'] ?? '')))
+            ) ?: 'unknown';
             ?>
 
-            <details
-                class="reservation-card<?= $hasCustomerMessage ? ' has-customer-message' : '' ?>"
-                data-booking-id="<?= e($reservation['booking_id']) ?>"
-            >
+            <details class="reservation-card status-<?= e($statusKey) ?><?= $hasCustomerMessage ? ' has-customer-message' : '' ?>" data-booking-id="<?= e($reservation['booking_id']) ?>">
                 <summary class="reservation-summary<?= $hasFlightDetails ? ' has-flight' : ' no-flight' ?>">
+                    <div class="mobile-reservation-overview<?= $returnTrip ? ' has-mobile-return' : '' ?>">
+                        <div class="mobile-primary-trip-row">
+                            <div class="mobile-ride-time">
+                                <strong><?= $primaryTripTime !== '' ? e(substr($primaryTripTime, 0, 5)) : '--:--' ?></strong>
+                                <span><?= $primaryDateTimestamp !== false ? e(strtoupper(date('d M', $primaryDateTimestamp))) : 'NO DATE' ?></span>
+                            </div>
+
+                            <div class="mobile-ride-main">
+                                <div class="mobile-route-line">
+                                    <span class="mobile-route-text">
+                                        <strong><?= e($primaryTrip['route_from'] ?? '-') ?></strong>
+                                        <span>→ <?= e($primaryTrip['route_to'] ?? '-') ?></span>
+                                    </span>
+                                </div>
+
+                                <div class="mobile-ride-meta">
+                                    <span class="passenger-icon-summary">
+                                        <?php if ((int)$reservation['adults'] > 0): ?>
+                                            <span class="passenger-stat passenger-stat--adults" title="Adults" aria-label="<?= (int)$reservation['adults'] ?> adults">
+                                                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                                                    <circle cx="8" cy="7" r="3"></circle>
+                                                    <circle cx="16" cy="7" r="3"></circle>
+                                                    <path d="M3 20v-1.5a5 5 0 0 1 10 0V20"></path>
+                                                    <path d="M11 20v-1.5a5 5 0 0 1 10 0V20"></path>
+                                                </svg>
+                                                <span><?= (int)$reservation['adults'] ?></span>
+                                            </span>
+                                        <?php endif; ?>
+
+                                        <?php if ((int)$reservation['children'] > 0): ?>
+                                            <span class="passenger-stat passenger-stat--child" title="Children" aria-label="<?= (int)$reservation['children'] ?> children">
+                                                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                                                    <path d="M4.6 10.2a7.6 7.6 0 0 1 14.8 0"></path>
+                                                    <path d="M4.6 10.2v3.2a7.4 7.4 0 0 0 14.8 0v-3.2"></path>
+                                                    <path d="M4.5 10.8c-1.35 0-2.2.9-2.2 2.1s.85 2.1 2.2 2.1"></path>
+                                                    <path d="M19.5 10.8c1.35 0 2.2.9 2.2 2.1s-.85 2.1-2.2 2.1"></path>
+                                                    <path d="M10.3 5.1c.2-1.75 1.8-2.85 3.35-2.25 1.45.55 1.9 2.35.95 3.45-.85 1-2.55 1.05-3.5.15"></path>
+                                                    <circle cx="9.25" cy="11.6" r="0.72" style="fill: currentColor; stroke: none;"></circle>
+                                                    <circle cx="14.75" cy="11.6" r="0.72" style="fill: currentColor; stroke: none;"></circle>
+                                                    <path d="M9.5 15.1c1.45 1.25 3.55 1.25 5 0"></path>
+                                                </svg>
+                                                <span><?= (int)$reservation['children'] ?></span>
+                                            </span>
+                                        <?php endif; ?>
+
+                                        <?php if ((int)$reservation['luggage_count'] > 0): ?>
+                                            <span class="passenger-stat passenger-stat--luggage" title="Luggage" aria-label="<?= (int)$reservation['luggage_count'] ?> luggage items">
+                                                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                                                    <path d="M9 6V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V6"></path>
+                                                    <rect x="6" y="6" width="12" height="14" rx="2"></rect>
+                                                    <path d="M9 9v8M15 9v8M9 20v1M15 20v1"></path>
+                                                </svg>
+                                                <span><?= (int)$reservation['luggage_count'] ?></span>
+                                            </span>
+                                        <?php endif; ?>
+                                    </span>
+                                    <span class="mobile-meta-divider" aria-hidden="true">·</span>
+                                    <span class="mobile-vehicle-name"><?= e($reservation['vehicle_type'] ?: 'No vehicle') ?></span>
+                                </div>
+                            </div>
+
+                            <?php if ($hasCustomerMessage): ?>
+                                <span class="mobile-message-icon" role="img" aria-label="Customer message available" title="Customer message available">
+                                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                                        <path d="M5.5 5.5h13a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-7.1l-4.7 3.2v-3.2H5.5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z"/>
+                                        <path d="M7.5 9h9M7.5 12.5h6"/>
+                                    </svg>
+                                </span>
+                            <?php endif; ?>
+                        </div>
+
+                        <?php if ($returnTrip): ?>
+                            <div class="mobile-return-trip" aria-label="Return trip">
+                                <div class="mobile-return-time">
+                                    <strong><?= $returnTripTime !== '' ? e(substr($returnTripTime, 0, 5)) : '--:--' ?></strong>
+                                    <span><?= $returnDateTimestamp !== false ? e(strtoupper(date('d M', $returnDateTimestamp))) : 'NO DATE' ?></span>
+                                </div>
+                                <div class="mobile-return-main">
+                                    <span class="mobile-return-label">
+                                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                                            <path d="M9 7 4 12l5 5"></path>
+                                            <path d="M4 12h10a6 6 0 0 1 6 6"></path>
+                                        </svg>
+                                        Return
+                                    </span>
+                                    <span class="mobile-return-route">
+                                        <strong><?= e($returnTrip['route_from'] ?? '-') ?></strong>
+                                        <span>→ <?= e($returnTrip['route_to'] ?? '-') ?></span>
+                                    </span>
+                                </div>
+                            </div>
+                        <?php endif; ?>
+                    </div>
+
                     <div class="cell booking-cell" data-label="Booking ID">
                         <div class="booking-reference">
                             <div class="booking-id-row">
                                 <span class="booking-id"><?= e($reservation['booking_id']) ?></span>
-
-                                <?php if ($hasCustomerMessage): ?>
-                                    <span
-                                        class="message-notification"
-                                        role="img"
-                                        aria-label="Customer message available"
-                                        title="Customer message available"
-                                    >
-                                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                                            <path d="M5.5 5.5h13a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-7.1l-4.7 3.2v-3.2H5.5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z"/>
-                                            <path d="M7.5 9h9M7.5 12.5h6"/>
-                                        </svg>
-                                        <span class="message-notification-dot" aria-hidden="true"></span>
-                                    </span>
-                                <?php endif; ?>
                             </div>
-
                             <?php if ($hasCreatedAt): ?>
-                                <span class="booking-created">Created <?= e(showDateTime($reservation['created_at'])) ?></span>
+                                <span class="booking-created">Created at <?= e(showDateTime($reservation['created_at'])) ?></span>
                             <?php endif; ?>
                         </div>
                     </div>
@@ -272,29 +1114,82 @@ try {
                     </div>
 
                     <div class="cell customer-cell span-2-mobile" data-label="Customer">
-                        <div>
-                            <strong><?= e($reservation['customer_name']) ?></strong>
+                        <div class="customer-content<?= $hasCustomerMessage ? ' has-desktop-message' : '' ?>">
+                            <div class="customer-name-line">
+                                <strong><?= e($reservation['customer_name']) ?></strong>
+                                <?php if ($hasCustomerMessage): ?>
+                                    <span class="desktop-customer-message" tabindex="0" aria-label="Customer message available" aria-describedby="desktop-message-tooltip-<?= $reservationId ?>">
+                                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                                            <path d="M5.5 5.5h13a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-7.1l-4.7 3.2v-3.2H5.5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z"/>
+                                            <path d="M7.5 9h9M7.5 12.5h6"/>
+                                        </svg>
+                                        <span id="desktop-message-tooltip-<?= $reservationId ?>" class="desktop-customer-message-tooltip" role="tooltip"><?= e($customerMessage) ?></span>
+                                    </span>
+                                <?php endif; ?>
+                            </div>
                             <?php if ($reservation['customer_phone']): ?>
-                                <a class="subtext phone-link" href="tel:<?= e($reservation['customer_phone']) ?>">
-                                    <?= e($reservation['customer_phone']) ?>
-                                </a>
+                                <a class="subtext phone-link" href="tel:<?= e($reservation['customer_phone']) ?>"><?= e($reservation['customer_phone']) ?></a>
                             <?php endif; ?>
                             <?php if ($reservation['customer_email']): ?>
-                                <a class="subtext email-link" href="mailto:<?= e($reservation['customer_email']) ?>">
-                                    <?= e(strtolower((string)$reservation['customer_email'])) ?>
-                                </a>
+                                <a class="subtext email-link" href="mailto:<?= e($reservation['customer_email']) ?>"><?= e(strtolower((string)$reservation['customer_email'])) ?></a>
                             <?php endif; ?>
                         </div>
                     </div>
 
                     <div class="cell passengers-cell" data-label="Pax / Luggage">
                         <div class="pax-line">
-                            <?php if ($compactItems): ?>
-                                <?php foreach ($compactItems as $item): ?>
-                                    <span><?= e($item) ?></span>
-                                <?php endforeach; ?>
-                            <?php else: ?>
-                                <span>-</span>
+                            <span class="passenger-icon-summary">
+                                <?php if ((int)$reservation['adults'] > 0): ?>
+                                    <span class="passenger-stat passenger-stat--adults" title="Adults" aria-label="<?= (int)$reservation['adults'] ?> adults">
+                                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                                            <circle cx="8" cy="7" r="3"></circle>
+                                            <circle cx="16" cy="7" r="3"></circle>
+                                            <path d="M3 20v-1.5a5 5 0 0 1 10 0V20"></path>
+                                            <path d="M11 20v-1.5a5 5 0 0 1 10 0V20"></path>
+                                        </svg>
+                                        <span><?= (int)$reservation['adults'] ?></span>
+                                    </span>
+                                <?php endif; ?>
+
+                                <?php if ((int)$reservation['children'] > 0): ?>
+                                    <span class="passenger-stat passenger-stat--child" title="Children" aria-label="<?= (int)$reservation['children'] ?> children">
+                                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                                            <path d="M4.6 10.2a7.6 7.6 0 0 1 14.8 0"></path>
+                                            <path d="M4.6 10.2v3.2a7.4 7.4 0 0 0 14.8 0v-3.2"></path>
+                                            <path d="M4.5 10.8c-1.35 0-2.2.9-2.2 2.1s.85 2.1 2.2 2.1"></path>
+                                            <path d="M19.5 10.8c1.35 0 2.2.9 2.2 2.1s-.85 2.1-2.2 2.1"></path>
+                                            <path d="M10.3 5.1c.2-1.75 1.8-2.85 3.35-2.25 1.45.55 1.9 2.35.95 3.45-.85 1-2.55 1.05-3.5.15"></path>
+                                            <circle cx="9.25" cy="11.6" r="0.72" style="fill: currentColor; stroke: none;"></circle>
+                                            <circle cx="14.75" cy="11.6" r="0.72" style="fill: currentColor; stroke: none;"></circle>
+                                            <path d="M9.5 15.1c1.45 1.25 3.55 1.25 5 0"></path>
+                                        </svg>
+                                        <span><?= (int)$reservation['children'] ?></span>
+                                    </span>
+                                <?php endif; ?>
+
+                                <?php if ((int)$reservation['luggage_count'] > 0): ?>
+                                    <span class="passenger-stat passenger-stat--luggage" title="Luggage" aria-label="<?= (int)$reservation['luggage_count'] ?> luggage items">
+                                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                                            <path d="M9 6V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V6"></path>
+                                            <rect x="6" y="6" width="12" height="14" rx="2"></rect>
+                                            <path d="M9 9v8M15 9v8M9 20v1M15 20v1"></path>
+                                        </svg>
+                                        <span><?= (int)$reservation['luggage_count'] ?></span>
+                                    </span>
+                                <?php endif; ?>
+                            </span>
+
+                            <?php if ((int)$reservation['baby_seats'] > 0 || $extraItems): ?>
+                                <span class="passenger-extra-items">
+                                    <?php if ((int)$reservation['baby_seats'] > 0): ?>
+                                        <span><?= (int)$reservation['baby_seats'] ?> baby seat<?= (int)$reservation['baby_seats'] === 1 ? '' : 's' ?></span>
+                                    <?php endif; ?>
+                                    <?php foreach ($extraItems as $key => $value): ?>
+                                        <?php if (hasVisibleValue($value)): ?>
+                                            <span><?= e((string)$key === 'child_seats' ? extraValueText($value) : humanizeFieldName((string)$key) . ': ' . extraValueText($value)) ?></span>
+                                        <?php endif; ?>
+                                    <?php endforeach; ?>
+                                </span>
                             <?php endif; ?>
                         </div>
                     </div>
@@ -304,8 +1199,6 @@ try {
                             <strong><?= e($reservation['vehicle_type'] ?: '-') ?></strong>
                             <?php if ($driverId !== ''): ?>
                                 <span class="subtext">Driver #<?= e($driverId) ?></span>
-                            <?php else: ?>
-                                <span class="subtext">Unassigned</span>
                             <?php endif; ?>
                         </div>
                     </div>
@@ -317,10 +1210,7 @@ try {
                     <div class="cell price-cell" data-label="Price">
                         <div>
                             <span class="money">€<?= number_format((float)$reservation['current_price'], 2) ?></span>
-                            <?php if (
-                                (float)$reservation['original_price'] > 0
-                                && (float)$reservation['original_price'] !== (float)$reservation['current_price']
-                            ): ?>
+                            <?php if ((float)$reservation['original_price'] > 0 && (float)$reservation['original_price'] !== (float)$reservation['current_price']): ?>
                                 <span class="subtext old-price">€<?= number_format((float)$reservation['original_price'], 2) ?></span>
                             <?php endif; ?>
                         </div>
@@ -338,13 +1228,109 @@ try {
                             <?php endif; ?>
                         </div>
                     </div>
+
+                    <span class="expand-control" aria-hidden="true"></span>
                 </summary>
 
                 <div class="details-panel">
+                    <!-- 1. Passengers & Luggage -->
+                    <article class="detail-box">
+                        <h2>Passengers &amp; Luggage</h2>
+                        <?php if ($compactItems): ?>
+                            <dl class="detail-list">
+                                <?php if ((int)$reservation['adults'] > 0): ?>
+                                    <div class="detail-row"><dt>Adults</dt><dd><?= (int)$reservation['adults'] ?></dd></div>
+                                <?php endif; ?>
+                                <?php if ((int)$reservation['children'] > 0): ?>
+                                    <div class="detail-row"><dt>Children</dt><dd><?= (int)$reservation['children'] ?></dd></div>
+                                <?php endif; ?>
+                                <?php if ((int)$reservation['luggage_count'] > 0): ?>
+                                    <div class="detail-row"><dt>Luggage</dt><dd><?= (int)$reservation['luggage_count'] ?></dd></div>
+                                <?php endif; ?>
+                                <?php foreach ($extraItems as $key => $value): ?>
+                                    <?php if (hasVisibleValue($value)): ?>
+                                        <div class="detail-row">
+                                            <dt><?= e(humanizeFieldName((string)$key)) ?></dt>
+                                            <dd><?= e(extraValueText($value)) ?></dd>
+                                        </div>
+                                    <?php endif; ?>
+                                <?php endforeach; ?>
+                            </dl>
+                        <?php else: ?>
+                            <p>No passenger or luggage details are available.</p>
+                        <?php endif; ?>
+                    </article>
+
+                    <!-- 2. Customer Message -->
+                    <?php if ($hasCustomerMessage): ?>
+                        <article class="detail-box customer-message-box">
+                            <h2>
+                                <span class="customer-message-heading-icon" aria-hidden="true">
+                                    <svg viewBox="0 0 24 24" focusable="false">
+                                        <path d="M5.5 5.5h13a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-7.1l-4.7 3.2v-3.2H5.5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z"/>
+                                        <path d="M7.5 9h9M7.5 12.5h6"/>
+                                    </svg>
+                                </span>
+                                Customer Message
+                            </h2>
+                            <p><?= nl2br(e($customerMessage)) ?></p>
+                        </article>
+                    <?php endif; ?>
+
+                    <!-- 3. Booking Information -->
+                    <article class="detail-box booking-info-box">
+                        <h2>Booking Information</h2>
+                        <dl class="detail-list">
+                            <div class="detail-row">
+                                <dt>Booking ID</dt>
+                                <dd><?= e($reservation['booking_id']) ?></dd>
+                            </div>
+                            <?php if ($hasCreatedAt): ?>
+                                <div class="detail-row">
+                                    <dt>Created at</dt>
+                                    <dd><?= e(showDateTime($reservation['created_at'])) ?></dd>
+                                </div>
+                            <?php endif; ?>
+                        </dl>
+                    </article>
+
+                    <!-- 4. Route Details (Mobile only) -->
+                    <article class="detail-box mobile-route-details-box">
+                        <h2>Route Details</h2>
+                        <div class="mobile-route-details-list">
+                            <?php foreach ($trips as $trip): ?>
+                                <?php
+                                $detailTripLabel = trim((string)($trip['label'] ?? ''));
+                                $detailTripDate = trim((string)($trip['trip_date'] ?? ''));
+                                $detailTripTime = trim((string)($trip['trip_time'] ?? ''));
+                                $detailTripTimestamp = $detailTripDate !== '' ? strtotime($detailTripDate) : false;
+                                ?>
+                                <section class="mobile-route-detail">
+                                    <div class="mobile-route-detail-heading">
+                                        <span class="mobile-route-detail-label"><?= e($detailTripLabel !== '' ? $detailTripLabel : 'Trip') ?></span>
+                                        <span class="mobile-route-detail-date-time">
+                                            <?= $detailTripTimestamp !== false ? e(date('d/m/Y', $detailTripTimestamp)) : 'No date' ?> · <?= $detailTripTime !== '' ? e(substr($detailTripTime, 0, 5)) : 'No time' ?>
+                                        </span>
+                                    </div>
+                                    <dl class="mobile-route-detail-list">
+                                        <div class="mobile-route-detail-row">
+                                            <dt>From</dt>
+                                            <dd><?= e($trip['route_from'] ?? '-') ?></dd>
+                                        </div>
+                                        <div class="mobile-route-detail-row">
+                                            <dt>To</dt>
+                                            <dd><?= e($trip['route_to'] ?? '-') ?></dd>
+                                        </div>
+                                    </dl>
+                                </section>
+                            <?php endforeach; ?>
+                        </div>
+                    </article>
+
+                    <!-- 5. Flight Details -->
                     <?php if ($hasFlightDetails): ?>
                         <article class="detail-box flight-detail-box">
                             <h2>Flight Details</h2>
-
                             <?php if ($flightDetails): ?>
                                 <div class="flight-detail-cards">
                                     <?php foreach ($flightDetails as $flight): ?>
@@ -355,7 +1341,6 @@ try {
                                                     <span><?= e($flight['airline']) ?></span>
                                                 <?php endif; ?>
                                             </strong>
-
                                             <?php if ($flight['from_airport'] || $flight['from_datetime']): ?>
                                                 <div class="flight-route-line">
                                                     <span>From</span>
@@ -367,7 +1352,6 @@ try {
                                                     </div>
                                                 </div>
                                             <?php endif; ?>
-
                                             <?php if ($flight['to_airport'] || $flight['to_datetime']): ?>
                                                 <div class="flight-route-line">
                                                     <span>To</span>
@@ -388,62 +1372,104 @@ try {
                         </article>
                     <?php endif; ?>
 
-                    <article class="detail-box">
-                        <h2>Passengers &amp; Luggage</h2>
-
-                        <?php if ($compactItems): ?>
-                            <dl class="detail-list">
-                                <?php if ((int)$reservation['adults'] > 0): ?>
-                                    <div class="detail-row"><dt>Adults</dt><dd><?= (int)$reservation['adults'] ?></dd></div>
+                    <!-- 6. Reservation Status (ΕΔΩ ΕΙΝΑΙ ΣΤΟ ΤΕΛΟΣ) -->
+                    <article class="detail-box status-action-box">
+                        <h2>Reservation Status</h2>
+                        <p>Current status: <strong><?= e(displayLabel($reservation['status'])) ?></strong></p>
+                        <div class="status-button-wrapper">
+                            <?php if (trim((string)($reservation['source_id'] ?? '')) === ''): ?>
+                                <p>Status changes require the numeric API reservation ID.</p>
+                            <?php else: ?>
+                                <?php if ($statusKey === 'confirmed' || $statusKey === 'active'): ?>
+                                    <form method="post" action="update-status.php" onsubmit="return confirm('Are you sure you want to cancel this reservation?');">
+                                        <input type="hidden" name="csrf_token" value="<?= e($_SESSION['csrf_token']) ?>">
+                                        <input type="hidden" name="booking_id" value="<?= e($reservation['booking_id']) ?>">
+                                        <input type="hidden" name="status" value="cancelled">
+                                        <button class="cancel-reservation-button" type="submit">
+                                            <svg viewBox="0 0 24 24" focusable="false" style="width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; vertical-align: middle; margin-right: 4px;">
+                                                <circle cx="12" cy="12" r="10"></circle>
+                                                <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>
+                                            </svg>
+                                            Cancel reservation
+                                        </button>
+                                    </form>
+                                <?php elseif (in_array($statusKey, ['cancelled', 'canceled'], true)): ?>
+                                    <form method="post" action="update-status.php" onsubmit="return confirm('Mark this reservation as confirmed?');">
+                                        <input type="hidden" name="csrf_token" value="<?= e($_SESSION['csrf_token']) ?>">
+                                        <input type="hidden" name="booking_id" value="<?= e($reservation['booking_id']) ?>">
+                                        <input type="hidden" name="status" value="confirmed">
+                                        <button class="reactivate-reservation-button" type="submit">
+                                            <svg viewBox="0 0 24 24" focusable="false" style="width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; vertical-align: middle; margin-right: 4px;">
+                                                <polyline points="20 6 9 17 4 12"></polyline>
+                                            </svg>
+                                            Mark as confirmed
+                                        </button>
+                                    </form>
                                 <?php endif; ?>
+                            <?php endif; ?>
 
-                                <?php if ((int)$reservation['children'] > 0): ?>
-                                    <div class="detail-row"><dt>Children</dt><dd><?= (int)$reservation['children'] ?></dd></div>
-                                <?php endif; ?>
-
-                                <?php if ((int)$reservation['luggage_count'] > 0): ?>
-                                    <div class="detail-row"><dt>Luggage</dt><dd><?= (int)$reservation['luggage_count'] ?></dd></div>
-                                <?php endif; ?>
-
-                                <?php foreach ($extraItems as $key => $value): ?>
-                                    <?php if (hasVisibleValue($value)): ?>
-                                        <div class="detail-row">
-                                            <dt><?= e(humanizeFieldName((string)$key)) ?></dt>
-                                            <dd><?= e(extraValueText($value)) ?></dd>
-                                        </div>
-                                    <?php endif; ?>
-                                <?php endforeach; ?>
-                            </dl>
-                        <?php else: ?>
-                            <p>No passenger or luggage details are available.</p>
-                        <?php endif; ?>
+                            <form method="post" action="delete-reservation.php" onsubmit="return confirm('This will permanently delete this reservation from the live dataset. Are you sure?');">
+                                <input type="hidden" name="csrf_token" value="<?= e($_SESSION['csrf_token']) ?>">
+                                <input type="hidden" name="booking_id" value="<?= e($reservation['booking_id']) ?>">
+                                <button class="delete-reservation-button" type="submit" title="Delete reservation">
+                                    <span class="delete-reservation-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24" focusable="false" style="width: 14px; height: 14px; fill: currentColor; vertical-align: middle; margin-right: 4px;">
+                                            <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+                                        </svg>
+                                    </span>
+                                    Delete reservation
+                                </button>
+                            </form>
+                        </div>
                     </article>
-
-                    <?php if ($hasCustomerMessage): ?>
-                        <article class="detail-box customer-message-box">
-                            <h2>
-                                <span class="customer-message-heading-icon" aria-hidden="true">
-                                    <svg viewBox="0 0 24 24" focusable="false">
-                                        <path d="M5.5 5.5h13a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-7.1l-4.7 3.2v-3.2H5.5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z"/>
-                                        <path d="M7.5 9h9M7.5 12.5h6"/>
-                                    </svg>
-                                </span>
-                                Customer Message
-                                <span class="new-message-label">Attention</span>
-                            </h2>
-                            <p><?= nl2br(e($customerMessage)) ?></p>
-                        </article>
-                    <?php endif; ?>
                 </div>
             </details>
         <?php endforeach; ?>
     </section>
 </main>
 
-<div id="json-watch-status" class="refresh-toast" role="status" aria-live="polite">
-    Watching reservations.json for changes
-</div>
+<script>
+    document.addEventListener("DOMContentLoaded", function() {
+        const todayStatCard = document.getElementById('todayStatCard');
+        if (todayStatCard) {
+            todayStatCard.addEventListener('click', function(e) {
+                e.preventDefault();
+                const today = new Date().toISOString().split('T')[0];
+                document.getElementById('date_from').value = today;
+                document.getElementById('date_to').value = today;
+                document.getElementById('filterForm').submit();
+            });
+        }
 
+        const tomorrowStatCard = document.getElementById('tomorrowStatCard');
+        if (tomorrowStatCard) {
+            tomorrowStatCard.addEventListener('click', function(e) {
+                e.preventDefault();
+                const tomorrowDate = new Date();
+                tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+                const tomorrowStr = tomorrowDate.toISOString().split('T')[0];
+                document.getElementById('date_from').value = tomorrowStr;
+                document.getElementById('date_to').value = tomorrowStr;
+                document.getElementById('filterForm').submit();
+            });
+        }
+
+        const weekStatCard = document.getElementById('weekStatCard');
+        if (weekStatCard) {
+            weekStatCard.addEventListener('click', function(e) {
+                e.preventDefault();
+                const today = new Date();
+                const todayStr = today.toISOString().split('T')[0];
+                const weekEnd = new Date();
+                weekEnd.setDate(weekEnd.getDate() + 6);
+                const weekEndStr = weekEnd.toISOString().split('T')[0];
+                document.getElementById('date_from').value = todayStr;
+                document.getElementById('date_to').value = weekEndStr;
+                document.getElementById('filterForm').submit();
+            });
+        }
+    });
+</script>
 <script src="app.js" defer></script>
 </body>
 </html>

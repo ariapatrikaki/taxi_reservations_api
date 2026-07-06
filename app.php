@@ -12,10 +12,10 @@ function appConfig(): array
             'password' => '',
             'charset' => 'utf8mb4',
         ],
-        'json_file' => __DIR__ . '/reservations.json',
-        'watch' => [
-            'timeout_seconds' => 25,
-            'check_interval_microseconds' => 1_000_000,
+        'api' => [
+            'url' => 'https://transfers.n22st.eu/wp-json/transfer-now/v1/reservations/',
+            'key' => 'tfn_py7dq41m7umtxvzlwtzpksxyft7j6v0a',
+            'poll_interval_milliseconds' => 60000,
         ],
     ];
 }
@@ -354,64 +354,146 @@ function ensureTripsTimeNullable(PDO $pdo): bool
 }
 
 /**
- * Synchronize reservations.json with MySQL only when the file content has changed.
+ * Fetch the reservations from the protected WordPress REST API.
+ *
+ * The cURL request uses the exact endpoint and X-TFN-Key supplied for the
+ * reservation service. It runs only on the PHP server, so the key is never
+ * exposed to browser JavaScript.
+ */
+function fetchReservationsApiResponse(array $apiConfig): string
+{
+    if (!function_exists('curl_init')) {
+        throw new RuntimeException(
+            'The PHP cURL extension is not enabled. Enable extension=curl in php.ini.'
+        );
+    }
+
+    $apiUrl = rtrim((string)($apiConfig['url'] ?? ''), '/') . '/';
+    $apiKey = trim((string)($apiConfig['key'] ?? ''));
+
+    if ($apiUrl === '/' || $apiKey === '') {
+        throw new RuntimeException('The reservations API URL or key is missing.');
+    }
+
+    $curl = curl_init();
+
+    curl_setopt_array($curl, array(
+      CURLOPT_URL => $apiUrl,
+      CURLOPT_RETURNTRANSFER => true,
+      CURLOPT_ENCODING => '',
+      CURLOPT_MAXREDIRS => 10,
+      CURLOPT_TIMEOUT => 30,
+      CURLOPT_FOLLOWLOCATION => true,
+      CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+      CURLOPT_CUSTOMREQUEST => 'GET',
+      CURLOPT_HTTPHEADER => array(
+        'X-TFN-Key: ' . $apiKey,
+        'Accept: application/json',
+      ),
+    ));
+
+    $response = curl_exec($curl);
+    $curlError = curl_error($curl);
+    $httpStatus = (int)curl_getinfo($curl, CURLINFO_HTTP_CODE);
+
+    curl_close($curl);
+
+    if ($response === false) {
+        throw new RuntimeException(
+            'The reservations API request failed: ' . ($curlError ?: 'Unknown cURL error.')
+        );
+    }
+
+    if ($httpStatus < 200 || $httpStatus >= 300) {
+        throw new RuntimeException(
+            'The reservations API returned HTTP ' . $httpStatus . '.'
+        );
+    }
+
+    return (string)$response;
+}
+
+/**
+ * Decode and validate one reservations API response.
+ *
+ * @return array{reservations: array, total: int, limit: int, offset: int}
+ */
+function decodeReservationsApiResponse(string $response): array
+{
+    $data = json_decode($response, true);
+
+    if (
+        !is_array($data)
+        || !isset($data['reservations'])
+        || !is_array($data['reservations'])
+    ) {
+        throw new RuntimeException(
+            'The reservations API did not return a valid reservations list.'
+        );
+    }
+
+    return [
+        'reservations' => $data['reservations'],
+        'total' => (int)($data['total'] ?? count($data['reservations'])),
+        'limit' => (int)($data['limit'] ?? count($data['reservations'])),
+        'offset' => (int)($data['offset'] ?? 0),
+    ];
+}
+
+/**
+ * Synchronize the protected reservations API with MySQL only when its
+ * response has changed.
  *
  * @return array{message: string, hash: string}
  */
-function syncReservationsFromJson(PDO $pdo, string $jsonFile, bool $forceResync = false): array
-{
-    if (!is_file($jsonFile)) {
-        return ['message' => 'reservations.json was not found.', 'hash' => ''];
-    }
-
-    $jsonText = file_get_contents($jsonFile);
-
-    if ($jsonText === false) {
-        return ['message' => 'reservations.json could not be read.', 'hash' => ''];
-    }
-
-    $jsonHash = hash('sha256', $jsonText);
-    $savedHash = getSavedJsonHash($pdo);
-
-    if (!$forceResync && $savedHash !== false && hash_equals((string)$savedHash, $jsonHash)) {
-        return ['message' => '', 'hash' => $jsonHash];
-    }
-
-    $data = json_decode($jsonText, true);
-
-    if (!is_array($data) || !isset($data['reservations']) || !is_array($data['reservations'])) {
-        return [
-            'message' => 'reservations.json does not have a valid reservations list.',
-            'hash' => $jsonHash,
-        ];
-    }
-
+function syncReservationsFromApi(
+    PDO $pdo,
+    array $apiConfig,
+    bool $forceResync = false
+): array {
     try {
-        $count = importReservations($pdo, $data['reservations'], $jsonHash);
+        $response = fetchReservationsApiResponse($apiConfig);
+        $apiHash = hash('sha256', $response);
+        $savedHash = getSavedApiHash($pdo);
+
+        if (
+            !$forceResync
+            && $savedHash !== false
+            && hash_equals((string)$savedHash, $apiHash)
+        ) {
+            return [
+                'message' => '',
+                'hash' => $apiHash,
+            ];
+        }
+
+        $data = decodeReservationsApiResponse($response);
+        $count = importReservations($pdo, $data['reservations'], $apiHash);
+
         return [
-            'message' => $count . ' reservations were synchronized with the database.',
-            'hash' => $jsonHash,
+            'message' => $count . ' reservations were synchronized from the live API.',
+            'hash' => $apiHash,
         ];
     } catch (Throwable $error) {
         return [
-            'message' => 'Synchronization failed: ' . $error->getMessage(),
-            'hash' => $jsonHash,
+            'message' => 'Live API synchronization failed: ' . $error->getMessage(),
+            'hash' => (string)(getSavedApiHash($pdo) ?: ''),
         ];
     }
 }
 
-/** Read the last successfully synchronized JSON hash. */
-function getSavedJsonHash(PDO $pdo): string|false
+/** Read the hash of the last successfully synchronized API response. */
+function getSavedApiHash(PDO $pdo): string|false
 {
     $statement = $pdo->prepare(
-        "SELECT meta_value FROM app_meta WHERE meta_key = 'reservations_json_hash'"
+        "SELECT meta_value FROM app_meta WHERE meta_key = 'reservations_api_hash'"
     );
     $statement->execute();
     return $statement->fetchColumn();
 }
 
-/** Import all JSON reservations inside a single database transaction. */
-function importReservations(PDO $pdo, array $reservations, string $jsonHash): int
+/** Import all API reservations inside a single database transaction. */
+function importReservations(PDO $pdo, array $reservations, string $apiHash): int
 {
     $reservationStatement = $pdo->prepare(reservationUpsertSql());
     $findReservationStatement = $pdo->prepare(
@@ -457,8 +539,8 @@ function importReservations(PDO $pdo, array $reservations, string $jsonHash): in
             insertReservationTrips($insertTripStatement, $reservationId, $reservation['trips']);
         }
 
-        deleteReservationsMissingFromJson($pdo, $bookingIds);
-        saveJsonHash($pdo, $jsonHash);
+        deleteReservationsMissingFromApi($pdo, $bookingIds);
+        saveApiHash($pdo, $apiHash);
         $pdo->commit();
 
         return count($bookingIds);
@@ -471,7 +553,7 @@ function importReservations(PDO $pdo, array $reservations, string $jsonHash): in
     }
 }
 
-/** Normalize both the real flat API schema and the previous nested demo schema. */
+/** Normalize the reservation structure returned by the live API. */
 function normalizeReservation(array $reservation): array
 {
     if (array_key_exists('pickup_from', $reservation)) {
@@ -549,7 +631,7 @@ function normalizeFlatReservation(array $reservation): array
     ];
 }
 
-/** Keep compatibility with the earlier nested demo JSON structure. */
+/** Keep compatibility with the earlier nested reservation structure. */
 function normalizeNestedReservation(array $reservation): array
 {
     $flight = is_array($reservation['flight'] ?? null) ? $reservation['flight'] : [];
@@ -646,7 +728,7 @@ function upsertReservation(PDOStatement $statement, array $reservation): void
     ]);
 }
 
-/** Keep unknown passenger and luggage fields from the legacy JSON. */
+/** Keep unknown passenger and luggage fields from legacy records. */
 function collectExtraItems(array $passengers, array $luggage): array
 {
     $extraItems = [];
@@ -698,8 +780,8 @@ function insertReservationTrips(PDOStatement $statement, int $reservationId, arr
     }
 }
 
-/** Delete database rows that no longer exist in reservations.json. */
-function deleteReservationsMissingFromJson(PDO $pdo, array $bookingIds): void
+/** Delete database rows that no longer exist in the latest API response. */
+function deleteReservationsMissingFromApi(PDO $pdo, array $bookingIds): void
 {
     if (!$bookingIds) {
         $pdo->exec('DELETE FROM reservations');
@@ -713,15 +795,15 @@ function deleteReservationsMissingFromJson(PDO $pdo, array $bookingIds): void
     $statement->execute($bookingIds);
 }
 
-/** Save the hash only after a successful synchronization. */
-function saveJsonHash(PDO $pdo, string $jsonHash): void
+/** Save the API response hash only after a successful synchronization. */
+function saveApiHash(PDO $pdo, string $apiHash): void
 {
     $statement = $pdo->prepare(<<<SQL
         INSERT INTO app_meta (meta_key, meta_value)
-        VALUES ('reservations_json_hash', ?)
+        VALUES ('reservations_api_hash', ?)
         ON DUPLICATE KEY UPDATE meta_value = VALUES(meta_value)
         SQL);
-    $statement->execute([$jsonHash]);
+    $statement->execute([$apiHash]);
 }
 
 /** SQL used to insert new reservations and update existing reservations. */
@@ -872,8 +954,16 @@ function findReservations(PDO $pdo, array $filters): array
     }
 
     if ($filters['status'] !== '') {
-        $sql .= ' AND LOWER(r.status) = LOWER(?)';
-        $params[] = $filters['status'];
+        $statusFilter = strtolower($filters['status']);
+
+        if (in_array($statusFilter, ['confirmed', 'active'], true)) {
+            $sql .= " AND LOWER(r.status) IN ('confirmed', 'active')";
+        } elseif (in_array($statusFilter, ['cancelled', 'canceled'], true)) {
+            $sql .= " AND LOWER(r.status) IN ('cancelled', 'canceled')";
+        } else {
+            $sql .= ' AND LOWER(r.status) = LOWER(?)';
+            $params[] = $filters['status'];
+        }
     }
 
     if ($filters['payment'] === 'open') {
@@ -920,7 +1010,7 @@ function getReservationSummary(PDO $pdo): array
     $statement = $pdo->query(<<<SQL
         SELECT
             COUNT(*) AS total_count,
-            COALESCE(SUM(LOWER(status) = 'active'), 0) AS active_count,
+            COALESCE(SUM(LOWER(status) IN ('active', 'confirmed')), 0) AS active_count,
             COALESCE(SUM(LOWER(status) IN ('cancelled', 'canceled')), 0) AS cancelled_count,
             COALESCE(SUM(LOWER(payment_status) IN ('pending', 'partially paid')), 0) AS open_payments
         FROM reservations
@@ -934,7 +1024,7 @@ function getReservationSummary(PDO $pdo): array
     ];
 }
 
-/** Decode additional passenger and luggage fields saved from JSON. */
+/** Decode additional passenger and luggage fields saved in MySQL. */
 function decodeExtraItems(?string $json): array
 {
     if (!$json) {
@@ -1045,4 +1135,207 @@ function splitAirportAndDateTime(string $value): array
     }
 
     return [$value, ''];
+}
+
+
+/** Convert dashboard status values into the exact values accepted by the API. */
+function normalizeApiStatusValue(string $status): string
+{
+    $statusKey = strtolower(trim($status));
+
+    return match ($statusKey) {
+        'active', 'confirmed' => 'confirmed',
+        'cancelled', 'canceled' => 'cancelled',
+        default => throw new InvalidArgumentException('Unsupported reservation status.'),
+    };
+}
+
+/**
+ * Send one status update to the protected WordPress REST API.
+ *
+ * The endpoint format is:
+ * /wp-json/transfer-now/v1/reservations/{reservation_id}/status
+ *
+ * The API key is kept on the PHP server and is never exposed to the browser.
+ */
+function postReservationStatusToApi(
+    array $apiConfig,
+    string $sourceId,
+    string $status
+): string {
+    if (!function_exists('curl_init')) {
+        throw new RuntimeException(
+            'The PHP cURL extension is not enabled. Enable extension=curl in php.ini.'
+        );
+    }
+
+    $sourceId = trim($sourceId);
+    $apiStatus = normalizeApiStatusValue($status);
+    $apiUrl = rtrim((string)($apiConfig['url'] ?? ''), '/');
+    $apiKey = trim((string)($apiConfig['key'] ?? ''));
+
+    if ($sourceId === '') {
+        throw new RuntimeException('This reservation does not have an API reservation ID.');
+    }
+
+    if ($apiUrl === '' || $apiKey === '') {
+        throw new RuntimeException('The reservations API URL or key is missing.');
+    }
+
+    $endpoint = $apiUrl . '/' . rawurlencode($sourceId) . '/status';
+    $payload = json_encode(
+        ['status' => $apiStatus],
+        JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+    );
+
+    if ($payload === false) {
+        throw new RuntimeException('Could not encode the status update payload.');
+    }
+
+    $curl = curl_init();
+
+    curl_setopt_array($curl, array(
+        CURLOPT_URL => $endpoint,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_ENCODING => '',
+        CURLOPT_MAXREDIRS => 10,
+        CURLOPT_TIMEOUT => 30,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+        CURLOPT_CUSTOMREQUEST => 'POST',
+        CURLOPT_POSTFIELDS => $payload,
+        CURLOPT_HTTPHEADER => array(
+            'X-TFN-Key: ' . $apiKey,
+            'Content-Type: application/json',
+            'Accept: application/json',
+        ),
+    ));
+
+    $response = curl_exec($curl);
+    $curlError = curl_error($curl);
+    $httpStatus = (int)curl_getinfo($curl, CURLINFO_HTTP_CODE);
+
+    curl_close($curl);
+
+    if ($response === false) {
+        throw new RuntimeException(
+            'The status API request failed: ' . ($curlError ?: 'Unknown cURL error.')
+        );
+    }
+
+    if ($httpStatus < 200 || $httpStatus >= 300) {
+        $message = trim((string)$response);
+        throw new RuntimeException(
+            'The status API returned HTTP ' . $httpStatus
+            . ($message !== '' ? ': ' . $message : '.')
+        );
+    }
+
+    return (string)$response;
+}
+
+/** Save one status locally after the live API accepts the change. */
+function updateLocalReservationStatus(PDO $pdo, string $bookingId, string $status): void
+{
+    $apiStatus = normalizeApiStatusValue($status);
+    $displayStatus = displayLabel($apiStatus);
+
+    $statement = $pdo->prepare(
+        'UPDATE reservations
+         SET status = ?
+         WHERE booking_id = ?'
+    );
+
+    $statement->execute([
+        $displayStatus,
+        $bookingId,
+    ]);
+}
+
+/** Load the API reservation ID used by the status endpoint. */
+function findReservationApiSourceId(PDO $pdo, string $bookingId): string
+{
+    $statement = $pdo->prepare(
+        'SELECT source_id FROM reservations WHERE booking_id = ? LIMIT 1'
+    );
+    $statement->execute([$bookingId]);
+
+    return trim((string)($statement->fetchColumn() ?: ''));
+}
+
+/**
+ * Delete one reservation from the protected WordPress REST API.
+ *
+ * The delete endpoint uses the public booking ID, for example:
+ * /wp-json/transfer-now/v1/reservations/030726-0826-285
+ *
+ * The API key is kept on the PHP server and is never exposed to the browser.
+ */
+function deleteReservationFromApi(array $apiConfig, string $bookingId): string
+{
+    if (!function_exists('curl_init')) {
+        throw new RuntimeException(
+            'The PHP cURL extension is not enabled. Enable extension=curl in php.ini.'
+        );
+    }
+
+    $bookingId = trim($bookingId);
+    $apiUrl = rtrim((string)($apiConfig['url'] ?? ''), '/');
+    $apiKey = trim((string)($apiConfig['key'] ?? ''));
+
+    if ($bookingId === '') {
+        throw new RuntimeException('Missing booking ID.');
+    }
+
+    if ($apiUrl === '' || $apiKey === '') {
+        throw new RuntimeException('The reservations API URL or key is missing.');
+    }
+
+    $endpoint = $apiUrl . '/' . rawurlencode($bookingId);
+    $curl = curl_init();
+
+    curl_setopt_array($curl, array(
+        CURLOPT_URL => $endpoint,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_ENCODING => '',
+        CURLOPT_MAXREDIRS => 10,
+        CURLOPT_TIMEOUT => 30,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+        CURLOPT_CUSTOMREQUEST => 'DELETE',
+        CURLOPT_HTTPHEADER => array(
+            'X-TFN-Key: ' . $apiKey,
+            'Content-Type: application/json',
+            'Accept: application/json',
+        ),
+    ));
+
+    $response = curl_exec($curl);
+    $curlError = curl_error($curl);
+    $httpStatus = (int)curl_getinfo($curl, CURLINFO_HTTP_CODE);
+
+    curl_close($curl);
+
+    if ($response === false) {
+        throw new RuntimeException(
+            'The delete API request failed: ' . ($curlError ?: 'Unknown cURL error.')
+        );
+    }
+
+    if ($httpStatus < 200 || $httpStatus >= 300) {
+        $message = trim((string)$response);
+        throw new RuntimeException(
+            'The delete API returned HTTP ' . $httpStatus
+            . ($message !== '' ? ': ' . $message : '.')
+        );
+    }
+
+    return (string)$response;
+}
+
+/** Remove one reservation from the local database after the live API deletes it. */
+function deleteLocalReservation(PDO $pdo, string $bookingId): void
+{
+    $statement = $pdo->prepare('DELETE FROM reservations WHERE booking_id = ?');
+    $statement->execute([trim($bookingId)]);
 }

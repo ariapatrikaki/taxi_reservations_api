@@ -1584,3 +1584,852 @@ input {
         animation: none;
     }
 }
+
+
+/* ==========================================================================
+   Compact booking-style mobile list and discreet expand control
+   ========================================================================== */
+
+
+
+.sr-only {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip: rect(0, 0, 0, 0) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
+}
+
+.mobile-reservation-overview {
+    display: none;
+}
+
+.expand-control {
+    position: absolute;
+    top: 50%;
+    left: 9px;
+    z-index: 3;
+    display: inline-grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border: 1px solid #d9e2ee;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.96);
+    color: #64748b;
+    box-shadow: 0 3px 10px rgba(15, 23, 42, 0.07);
+    transform: translateY(-50%);
+    transition:
+        border-color 0.16s ease,
+        background-color 0.16s ease,
+        color 0.16s ease,
+        transform 0.16s ease;
+    pointer-events: none;
+}
+
+.expand-control::before {
+    content: "+";
+    margin-top: -1px;
+    font-size: 19px;
+    font-weight: 500;
+    line-height: 1;
+}
+
+.reservation-card[open] .expand-control {
+    border-color: #bfd0eb;
+    background: #eef5ff;
+    color: #1d4ed8;
+}
+
+.reservation-card[open] .expand-control::before {
+    content: "−";
+}
+
+@media (min-width: 761px) {
+    /* Do not move the entire data grid */
+    .reservation-summary {
+        padding-left: 0;
+    }
+
+    /* Reserve space for the +/- button only in the first column */
+    .reservation-summary > .booking-cell {
+        padding-left: 54px;
+    }
+
+    /* Align the first heading with the Booking ID content */
+    .table-head > div:first-child {
+        padding-left: 54px;
+    }
+
+    /* Keep all other headings aligned to the left of their columns */
+    .table-head > div {
+        justify-content: flex-start;
+        text-align: left;
+    }
+}
+
+@media (max-width: 760px) {
+    .page-shell {
+        width: 100%;
+        padding:
+            max(10px, env(safe-area-inset-top))
+            max(9px, env(safe-area-inset-right))
+            max(24px, env(safe-area-inset-bottom))
+            max(9px, env(safe-area-inset-left));
+    }
+
+    .topbar {
+        margin-bottom: 10px;
+    }
+
+    .brand-wrap {
+        gap: 9px;
+    }
+
+    .brand-mark {
+        flex: 0 0 36px;
+        width: 36px;
+        height: 36px;
+        border-radius: 11px;
+        font-size: 17px;
+        box-shadow: 0 6px 15px rgba(37, 99, 235, 0.2);
+    }
+
+    h1 {
+        font-size: 1.08rem;
+        line-height: 1.15;
+    }
+
+    .subtitle {
+        margin-top: 2px;
+        font-size: 0.69rem;
+        line-height: 1.25;
+    }
+
+    /* Four compact quick-filter tiles instead of oversized cards. */
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 5px;
+        margin-bottom: 9px;
+    }
+
+    .stat-card {
+        display: grid;
+        align-content: center;
+        min-width: 0;
+        min-height: 56px;
+        padding: 7px 5px;
+        border-width: 1px;
+        border-radius: 10px;
+        box-shadow: 0 3px 10px rgba(15, 23, 42, 0.045);
+        text-align: center;
+    }
+
+    .stat-card::after {
+        display: none;
+    }
+
+    .stat-label {
+        min-height: 0;
+        font-size: 0.52rem;
+        line-height: 1.12;
+        letter-spacing: 0.018em;
+    }
+
+    .stat-value {
+        margin-top: 3px;
+        font-size: 1rem;
+        line-height: 1;
+    }
+
+    .sync-banner {
+        margin-bottom: 9px;
+        padding: 8px 10px;
+        font-size: 0.71rem;
+    }
+
+    .sync-banner::before {
+        flex-basis: 18px;
+        width: 18px;
+        height: 18px;
+        font-size: 0.68rem;
+    }
+
+    .filter-card {
+        margin-bottom: 9px;
+        padding: 9px;
+        border-radius: 12px;
+    }
+
+    .filters {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 7px;
+    }
+
+    .filters .search-field {
+        grid-column: 1 / -1;
+    }
+
+    .field {
+        gap: 4px;
+    }
+
+    .field label {
+        font-size: 0.58rem;
+        letter-spacing: 0.025em;
+    }
+
+    .field input {
+        min-height: 39px;
+        padding-inline: 10px;
+        border-radius: 9px;
+        font-size: 16px;
+    }
+
+    .filter-actions {
+        grid-column: 1 / -1;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 7px;
+    }
+
+    .button {
+        min-height: 39px;
+        padding-inline: 10px;
+        border-radius: 9px;
+        font-size: 0.78rem;
+        box-shadow: none;
+    }
+
+    .result-line {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-direction: row;
+        gap: 8px;
+        margin: 0 3px 7px;
+        font-size: 0.7rem;
+    }
+
+    .live-indicator {
+        max-width: 58%;
+        justify-content: flex-end;
+        font-size: 0.65rem;
+        line-height: 1.2;
+        text-align: right;
+    }
+
+    .live-dot {
+        flex-basis: 6px;
+        width: 6px;
+        height: 6px;
+        margin-top: 1px;
+        box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.11);
+    }
+
+    .reservation-card {
+        margin-bottom: 6px;
+        border-radius: 12px;
+        box-shadow: 0 3px 11px rgba(15, 23, 42, 0.055);
+    }
+
+    .reservation-card[open] {
+        border-color: #bfd0e8;
+        box-shadow: 0 6px 17px rgba(15, 23, 42, 0.08);
+    }
+
+    .reservation-summary,
+    .reservation-summary.has-flight,
+    .reservation-summary.no-flight {
+        position: relative;
+        display: block;
+        min-width: 0;
+        min-height: 68px;
+        padding: 0;
+        background: #fff;
+    }
+
+    /* The detailed desktop cells remain available after expanding, but are
+       replaced by one concise booking-style row while the card is closed. */
+    .reservation-summary > .cell {
+        display: none !important;
+    }
+
+    .mobile-reservation-overview {
+        display: grid;
+        grid-template-columns: 47px minmax(0, 1fr) 9px;
+        align-items: center;
+        gap: 8px;
+        min-height: 68px;
+        padding: 8px 9px 8px 42px;
+    }
+
+    .mobile-ride-time {
+        display: flex;
+        flex-direction: column-reverse;
+        align-items: center;
+        justify-content: center;
+        min-width: 0;
+        padding-right: 7px;
+        border-right: 1px solid #e8edf4;
+        text-align: center;
+    }
+
+    .mobile-ride-time strong {
+        color: #172033;
+        font-size: 0.91rem;
+        font-weight: 600;
+        line-height: 1.05;
+        margin-top: 4px;
+    }
+
+    .mobile-ride-time span {
+        color: #334155;
+        font-size: 0.54rem;
+        font-weight: 700;
+        letter-spacing: 0.035em;
+        line-height: 1;
+        white-space: nowrap;
+    }
+
+    .mobile-ride-main {
+        min-width: 0;
+    }
+
+    .mobile-route-line {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+    }
+
+    .mobile-route-text {
+        display: flex;
+        align-items: baseline;
+        gap: 4px;
+        min-width: 0;
+        overflow: hidden;
+        color: #334155;
+        font-size: 0.77rem;
+        line-height: 1.22;
+        white-space: nowrap;
+    }
+
+    .mobile-route-text strong {
+        flex: 0 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        color: #172033;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .mobile-route-text > span {
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        color: #64748b;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .mobile-ride-meta {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        min-width: 0;
+        margin-top: 5px;
+        overflow: hidden;
+        color: #475569;
+        font-size: 0.62rem;
+        font-weight: 700;
+        line-height: 1;
+        white-space: nowrap;
+    }
+
+    .mobile-ride-meta span {
+        flex: 0 0 auto;
+    }
+
+    .mobile-booking-id {
+        max-width: 44%;
+        overflow: hidden;
+        color: #3154a5;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-weight: 800;
+        text-overflow: ellipsis;
+    }
+
+
+    .mobile-travel-counts {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        flex: 0 0 auto;
+        min-width: 0;
+    }
+
+    .mobile-travel-count {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+        color: #536176;
+        font-size: 0.61rem;
+        line-height: 1;
+    }
+
+    .mobile-travel-count svg {
+        width: 12px;
+        height: 12px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.8;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+    }
+
+    .mobile-travel-count strong {
+        color: #475569;
+        font-size: 0.61rem;
+        font-weight: 800;
+    }
+
+    .mobile-status-dot {
+        display: block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #94a3b8;
+        box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.13);
+    }
+
+    .mobile-status-dot.status-active,
+    .mobile-status-dot.status-confirmed {
+        background: #22a35a;
+        box-shadow: 0 0 0 3px rgba(34, 163, 90, 0.13);
+    }
+
+    .mobile-status-dot.status-cancelled,
+    .mobile-status-dot.status-canceled {
+        background: #e04b43;
+        box-shadow: 0 0 0 3px rgba(224, 75, 67, 0.13);
+    }
+
+    .mobile-status-dot.status-completed {
+        background: #1b8cc5;
+        box-shadow: 0 0 0 3px rgba(27, 140, 197, 0.13);
+    }
+
+    .mobile-status-dot.status-pending {
+        background: #d99a14;
+        box-shadow: 0 0 0 3px rgba(217, 154, 20, 0.13);
+    }
+
+    .mobile-message-dot {
+        position: relative;
+        display: inline-block;
+        flex: 0 0 8px;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #f97316;
+        box-shadow: 0 0 0 0 rgba(249, 115, 22, 0.3);
+        animation: mobile-message-pulse 1.7s ease-out infinite;
+    }
+
+    @keyframes mobile-message-pulse {
+        0% {
+            box-shadow: 0 0 0 0 rgba(249, 115, 22, 0.32);
+        }
+        70%, 100% {
+            box-shadow: 0 0 0 6px rgba(249, 115, 22, 0);
+        }
+    }
+
+    .expand-control {
+        left: 8px;
+        right: auto;
+        width: 27px;
+        height: 27px;
+        box-shadow: none;
+    }
+
+    .expand-control::before {
+        font-size: 18px;
+    }
+
+    .details-panel {
+        gap: 7px;
+        padding: 8px;
+        border-top: 1px solid #e8edf4;
+    }
+
+    .detail-box {
+        padding: 11px;
+        border-radius: 10px;
+    }
+
+    .detail-box h2 {
+        margin-bottom: 7px;
+        font-size: 0.64rem;
+    }
+
+    .detail-box p {
+        font-size: 0.78rem;
+        line-height: 1.42;
+    }
+
+    .customer-message-box {
+        padding-left: 13px;
+    }
+
+    .customer-message-box p {
+        padding: 8px 9px;
+        font-size: 0.79rem;
+        line-height: 1.4;
+    }
+
+    .detail-row {
+        grid-template-columns: minmax(72px, 0.4fr) minmax(0, 1fr);
+        gap: 7px;
+        font-size: 0.73rem;
+    }
+
+    .refresh-toast {
+        margin:
+            0
+            max(9px, env(safe-area-inset-right))
+            max(12px, env(safe-area-inset-bottom))
+            max(9px, env(safe-area-inset-left));
+        padding: 8px 10px;
+        font-size: 0.67rem;
+    }
+}
+
+@media (max-width: 370px) {
+    .stats-grid {
+        gap: 4px;
+    }
+
+    .stat-card {
+        min-height: 52px;
+        padding: 6px 3px;
+    }
+
+    .stat-label {
+        font-size: 0.48rem;
+    }
+
+    .stat-value {
+        font-size: 0.94rem;
+    }
+
+    .mobile-reservation-overview {
+        grid-template-columns: 43px minmax(0, 1fr) 8px;
+        gap: 6px;
+        padding-left: 7px;
+    }
+
+    .mobile-ride-time {
+        padding-right: 5px;
+        flex-direction: column-reverse;
+    }
+
+    .mobile-route-text {
+        font-size: 0.72rem;
+    }
+
+    .mobile-ride-meta {
+        font-size: 0.57rem;
+    }
+
+    .live-indicator {
+        display: none;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .mobile-message-dot {
+        animation: none;
+    }
+}
+
+@media (max-width: 760px) {
+
+    /* -------------------------------------------------------
+       1. Date larger, time smaller
+       Applies to both Go and Return
+    ------------------------------------------------------- */
+
+    .mobile-ride-time,
+    .mobile-return-time {
+        display: flex !important;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+    }
+
+    /* Date */
+    .mobile-ride-time span,
+    .mobile-return-time span {
+        order: 1;
+        margin: 0;
+        color: #172033;
+        font-size: 0.79rem !important;
+        font-weight: 900;
+        letter-spacing: 0.025em;
+        line-height: 1.1;
+        white-space: nowrap;
+    }
+
+    /* Time */
+    .mobile-ride-time strong,
+    .mobile-return-time strong {
+        order: 2;
+        margin-top: 4px;
+        color: #64748b;
+        font-size: 0.63rem !important;
+        font-weight: 750;
+        line-height: 1;
+    }
+
+
+    /* -------------------------------------------------------
+       2. Soft status background instead of status dot
+    ------------------------------------------------------- */
+
+    .mobile-status-dot {
+        display: none !important;
+    }
+
+    /* Active / confirmed */
+    .reservation-card.reservation-status-active,
+    .reservation-card.reservation-status-confirmed {
+        border-color: #dceee2;
+        background: #fbfefc;
+    }
+
+    .reservation-card.reservation-status-active .reservation-summary,
+    .reservation-card.reservation-status-active .mobile-reservation-overview,
+    .reservation-card.reservation-status-active .mobile-primary-trip-row,
+    .reservation-card.reservation-status-confirmed .reservation-summary,
+    .reservation-card.reservation-status-confirmed .mobile-reservation-overview,
+    .reservation-card.reservation-status-confirmed .mobile-primary-trip-row {
+        background: #fbfefc !important;
+    }
+
+    .reservation-card.reservation-status-active .mobile-return-trip,
+    .reservation-card.reservation-status-confirmed .mobile-return-trip {
+        border-color: #dceee2;
+        background: #f6fbf7 !important;
+    }
+
+    /* Cancelled */
+    .reservation-card.reservation-status-cancelled,
+    .reservation-card.reservation-status-canceled {
+        border-color: #f2dddd;
+        background: #fffafa;
+    }
+
+    .reservation-card.reservation-status-cancelled .reservation-summary,
+    .reservation-card.reservation-status-cancelled .mobile-reservation-overview,
+    .reservation-card.reservation-status-cancelled .mobile-primary-trip-row,
+    .reservation-card.reservation-status-canceled .reservation-summary,
+    .reservation-card.reservation-status-canceled .mobile-reservation-overview,
+    .reservation-card.reservation-status-canceled .mobile-primary-trip-row {
+        background: #fffafa !important;
+    }
+
+    .reservation-card.reservation-status-cancelled .mobile-return-trip,
+    .reservation-card.reservation-status-canceled .mobile-return-trip {
+        border-color: #f2dddd;
+        background: #fff6f6 !important;
+    }
+
+
+    /* -------------------------------------------------------
+       3. Fixed customer-message icon
+    ------------------------------------------------------- */
+
+    .mobile-message-dot {
+        display: none !important;
+    }
+
+    .mobile-primary-trip-row {
+        position: relative;
+        padding-right: 39px;
+    }
+
+    .mobile-message-icon {
+        position: absolute;
+        top: 50%;
+        right: 9px;
+        display: grid;
+        place-items: center;
+        width: 27px;
+        height: 27px;
+        border: 1px solid #fed7aa;
+        border-radius: 50%;
+        background: #fff7ed;
+        color: #ea580c;
+        transform: translateY(-50%);
+    }
+
+    .mobile-message-icon svg {
+        width: 15px;
+        height: 15px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.9;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+    }
+
+
+    /* -------------------------------------------------------
+       4. Make vehicle clearer
+    ------------------------------------------------------- */
+
+    .mobile-vehicle-name {
+        color: #172033 !important;
+        font-weight: 900 !important;
+    }
+
+
+    /* -------------------------------------------------------
+       5. Booking information details box
+    ------------------------------------------------------- */
+
+    .booking-info-box .detail-row dd {
+        color: #172033;
+        font-weight: 750;
+    }
+
+    .booking-info-box .detail-row:first-child dd {
+        font-family:
+            ui-monospace,
+            SFMono-Regular,
+            Menlo,
+            Consolas,
+            monospace;
+        color: #3154a5;
+    }
+}
+
+.status-action-box form {
+    margin-top: 12px;
+}
+
+.cancel-reservation-button,
+.reactivate-reservation-button {
+    min-height: 40px;
+    padding: 9px 16px;
+    border: 0;
+    border-radius: 9px;
+    font: inherit;
+    font-weight: 800;
+    cursor: pointer;
+}
+
+.cancel-reservation-button {
+    background: #fee2e2;
+    color: #b91c1c;
+}
+
+.cancel-reservation-button:hover {
+    background: #fecaca;
+}
+
+.reactivate-reservation-button {
+    background: #dcfce7;
+    color: #15803d;
+}
+
+.reactivate-reservation-button:hover {
+    background: #bbf7d0;
+}
+
+@media (max-width: 760px) {
+    .cancel-reservation-button,
+    .reactivate-reservation-button {
+        width: 100%;
+    }
+}
+.sync-banner-success {
+    border-color: #bbf7d0;
+    background: #f0fdf4;
+    color: #166534;
+}
+
+.sync-banner-error {
+    border-color: #fecaca;
+    background: #fef2f2;
+    color: #991b1b;
+}
+
+.sync-banner-error::before {
+    content: "!";
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.danger-zone {
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid #fee2e2;
+}
+
+.danger-zone-title {
+    margin: 0 0 10px;
+    color: #991b1b;
+    font-size: 0.72rem;
+    font-weight: 900;
+    letter-spacing: 0.055em;
+    text-transform: uppercase;
+}
+
+.delete-reservation-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 40px;
+    padding: 9px 16px;
+    border: 0;
+    border-radius: 9px;
+    background: #dc2626;
+    color: #ffffff;
+    font: inherit;
+    font-weight: 900;
+    cursor: pointer;
+    box-shadow: 0 8px 18px rgba(220, 38, 38, 0.18);
+    transition: background 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
+}
+
+.delete-reservation-button:hover {
+    background: #b91c1c;
+    transform: translateY(-1px);
+    box-shadow: 0 11px 22px rgba(185, 28, 28, 0.22);
+}
+
+.delete-reservation-button svg {
+    width: 17px;
+    height: 17px;
+    flex: 0 0 17px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+@media (max-width: 760px) {
+    .delete-reservation-button {
+        width: 100%;
+    }
+}

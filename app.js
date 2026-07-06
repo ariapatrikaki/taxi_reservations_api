@@ -2,28 +2,36 @@
     'use strict';
 
     const page = document.body;
-    const watchStatus = document.getElementById('json-watch-status');
+    const apiStatus = document.getElementById('api-watch-status');
     const watchUrl = page.dataset.watchUrl || 'watch.php';
     const storageKey = page.dataset.openStorageKey || 'openReservationCards';
-    let lastJsonHash = page.dataset.jsonHash || '';
+    const pollInterval = Number(page.dataset.watchInterval || 60000);
+    let lastApiHash = page.dataset.apiHash || '';
 
     /** Save the booking IDs of expanded reservation rows. */
     function saveOpenReservations() {
-        const openIds = Array.from(document.querySelectorAll('.reservation-card[open]'))
+        const openIds = Array.from(
+            document.querySelectorAll('.reservation-card[open]')
+        )
             .map((card) => card.dataset.bookingId)
             .filter(Boolean);
 
         sessionStorage.setItem(storageKey, JSON.stringify(openIds));
     }
 
-    /** Restore expanded reservation rows after a JSON-triggered page reload. */
+    /** Restore expanded reservation rows after an API-triggered page reload. */
     function restoreOpenReservations() {
         let openIds = [];
 
         try {
-            openIds = JSON.parse(sessionStorage.getItem(storageKey) || '[]');
+            openIds = JSON.parse(
+                sessionStorage.getItem(storageKey) || '[]'
+            );
         } catch (error) {
-            console.warn('Could not restore expanded reservations.', error);
+            console.warn(
+                'Could not restore expanded reservations.',
+                error
+            );
         }
 
         document.querySelectorAll('.reservation-card').forEach((card) => {
@@ -32,32 +40,38 @@
         });
     }
 
-    /** Pause before reconnecting only when the watcher encounters an error. */
+    /** Pause before the next API status check. */
     function wait(milliseconds) {
-        return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+        return new Promise((resolve) => {
+            window.setTimeout(resolve, milliseconds);
+        });
     }
 
-    /** Update the small watcher status message. */
-    function setWatchStatus(message) {
-        if (watchStatus) {
-            watchStatus.textContent = message;
+    /** Update the live API status message. */
+    function setApiStatus(message) {
+        if (apiStatus) {
+            apiStatus.textContent = message;
         }
     }
 
     /**
-     * Keep one long-poll request open at a time.
-     * The page reloads only when watch.php reports a different valid JSON hash.
+     * Check the protected API periodically.
+     * The page reloads only when the API response hash changes.
      */
-    async function watchJsonForChanges() {
+    async function watchApiForChanges() {
         while (true) {
+            await wait(pollInterval);
+
             try {
-                setWatchStatus('Watching reservations.json for changes');
+                setApiStatus('Checking the live reservations API');
 
                 const url = new URL(watchUrl, window.location.href);
-                url.searchParams.set('hash', lastJsonHash);
+                url.searchParams.set('hash', lastApiHash);
                 url.searchParams.set('_', Date.now().toString());
 
-                const response = await fetch(url, { cache: 'no-store' });
+                const response = await fetch(url, {
+                    cache: 'no-store'
+                });
 
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}`);
@@ -66,29 +80,40 @@
                 const result = await response.json();
 
                 if (!result.ok) {
-                    setWatchStatus(result.message || 'Could not watch reservations.json.');
-                    await wait(2500);
-                    continue;
+                    throw new Error(
+                        result.message || 'The API check failed.'
+                    );
                 }
 
-                if (result.changed && result.hash !== lastJsonHash) {
-                    setWatchStatus('JSON change detected. Updating the database and page...');
+                if (
+                    result.changed
+                    && result.hash
+                    && result.hash !== lastApiHash
+                ) {
+                    setApiStatus(
+                        'New reservation data found. Updating the dashboard…'
+                    );
                     saveOpenReservations();
                     window.location.reload();
                     return;
                 }
 
                 if (result.hash) {
-                    lastJsonHash = result.hash;
+                    lastApiHash = result.hash;
                 }
+
+                setApiStatus('Live API connected');
             } catch (error) {
-                setWatchStatus('Watcher disconnected. Reconnecting...');
+                setApiStatus(
+                    'API check unavailable. Retrying automatically…'
+                );
                 console.error(error);
-                await wait(2500);
+                await wait(15000);
             }
         }
     }
 
     restoreOpenReservations();
-    watchJsonForChanges();
+    setApiStatus('Live API connected');
+    watchApiForChanges();
 })();
